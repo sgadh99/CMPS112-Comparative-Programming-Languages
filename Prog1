@@ -1,0 +1,241 @@
+#!/afs/cats.ucsc.edu/courses/cmps112-wm/usr/racket/bin/mzscheme -qr
+
+(define *stdin* (current-input-port))
+(define *stdout* (current-output-port))
+(define *stderr* (current-error-port))
+
+(define *run-file*
+    (let-values
+        (((dirpath basepath root?)
+            (split-path (find-system-path 'run-file))))
+        (path->string basepath))
+)
+
+(define (die list)
+    (for-each (lambda (item) (display item *stderr*)) list)
+    (newline *stderr*)
+    (exit 1)
+)
+
+(define (usage-exit)
+    (die `("Usage: " ,*run-file* " filename"))
+)
+
+(define (readlist-from-inputfile filename)
+    (let ((inputfile (open-input-file filename)))
+         (if (not (input-port? inputfile))
+             (die `(,*run-file* ": " ,filename ": open failed"))
+             (let ((program (read inputfile)))
+                  (close-input-port inputfile)
+                         program))))
+
+(define (dump-stdin)
+    (let ((token (read)))
+         (printf "token=~a~n" token)
+         (when (not (eq? token eof)) (dump-stdin))))
+
+
+(define (write-program-by-line filename program)
+    (printf "==================================================~n")
+    (printf "~a: ~s~n" *run-file* filename)
+    (printf "==================================================~n")
+    (printf "(~n")
+    (for-each (lambda (line) (printf "~s~n" line)) program)
+    (printf ")~n"))
+
+(define *function-table* (make-hash))
+(define *variable-table* (make-hash))
+(define *array-table* (make-hash))
+
+(define *label-table* (make-hash))
+(define (label-get key)
+        (hash-ref *label-table* key '()))
+(define (label-put! key value)
+        (hash-set! *label-table* key value ))
+
+
+(define (function-get key)
+(hash-ref *function-table* key '(no such key in
+                                        function-table)))
+(define (function-put! key value)
+  (hash-set! *function-table* key value))
+
+(define (value-of lin)
+  (if (pair? lin)
+      (apply (function-get (car lin)) 
+          (map value-of (cdr lin)))
+        (cond ((number? lin) lin)
+            (else (variable-get lin)))))
+
+(define lengthlist (lambda (llist)
+    (define length (lambda (llist x)
+        (if (null? llist)x
+          (length (cdr llist) (+ x 1)))))
+        (length llist 0)))
+
+
+(define *variable-table* (make-hash))
+(define (variable-get key)
+        (hash-ref *variable-table* key '(no such key in 
+                                          variable-table)))
+(define (variable-put! key value)
+  (hash-set! *variable-table* key value))
+
+(for-each
+  (lambda (pair)
+    (function-put! (car pair) (cadr pair)))
+  `(
+    (nan (/ 0.0 0.0))
+    (eof 0.0)
+    (pi 3.141592653589793238462643383279502884197169399)
+    (e 2.718281828459045235360287471352662497757247093)
+    (log10_2 0.301029995663981195213738894724493026768189881)
+    (userin 0)
+  ))
+
+(define (insert-label-table tbl)
+    (when (not (null? tbl))
+        (let ((first (caar tbl)))
+        (when (number? first)
+            (if (not (null? (cdar tbl)))
+                (if (not (symbol? (cadar tbl)))
+                    (void)
+                    (begin
+                        (label-put! (cadar tbl) (caar tbl))))
+                            (void))))
+    (insert-label-table (cdr tbl))))
+
+(define (interpret-print lin)
+  (if (not (null? lin))
+    (begin
+      (if (string? (car lin))
+        (display (car lin))
+        (display (value-of (car lin)))
+      )
+        (interpret-print (cdr lin))
+    )
+        (newline)))
+
+(define (interpret-input lin)
+  (variable-put! 'userin 0)
+    (define (get-input lin)
+      (when (not (null? (car lin)))
+      (variable-put! (car lin) (void))
+      (let ((data (read)))
+        (cond [(eof-object? data)(variable-put! 'userin-1)]
+          [(number? data)(variable-put! (car lin) data)
+            (variable-put! 'userin 
+		(+ (variable-get 'userin) 1))]
+        [else (begin (printf "NAN: not a number" data))]))
+    (when (not (null? (cdr lin)))
+      (get-input (cdr lin)))))
+    (get-input lin)
+)
+
+(define (interpret-dim arr)
+  (variable-put! (caar arr) (make-vector (value-of (cadar arr))))
+  (function-put! (caar arr)
+    (lambda(x) (vector-ref (variable-get (caar arr)) (- x 1)
+))))
+
+(define (interpret-let lin)
+  (if (pair? (car lin))
+    (begin
+      (vector-set! (variable-get
+        (caar lin)) (- (value-of (cadar lin)) 1)
+        (value-of (cadr lin))))
+    (begin
+      (let ((finres (value-of (cadr lin))))
+        (variable-put! (car lin) finres)
+))))
+
+(define (interpret-if program lin)
+  (interpret-program program (- (label-get (caddr lin)) 1)))
+
+(define (interpret-goto program lin)
+  (interpret-program program (- (label-get (cadr lin)) 1)))
+
+(for-each
+  (lambda (pair)
+    (function-put! (car pair) (cadr pair)))
+  `(
+    (+, +)
+    (- , -)
+    (*, *)
+    (/ , /)
+    (= , equal?)
+    (< , <)
+    (>, >)
+    (<= , <=)
+    (>=, >=)
+    (abs , abs)
+    (acos , acos)
+    (asin, asin)
+    (atan, atan)
+    (ceil, ceiling)
+    (cos, cos)
+    (^, expt)
+    (exp, exp)
+    (floor, floor)
+    (log, log)
+    (log10, (lambda(x)(/(log x)(log 10.0))))
+    (log2, (lambda(x)(/log x)(log 2.0))))
+    (quot,(lambda (x y) (truncate (/ x y))))
+    (rem ,(lambda (x y) (- x (* ('x y) y))))
+    (round, round)
+    (sin, sin)
+    (sqrt, sqrt)
+    (tan, tan)
+    (print, interpret-print)
+    (let, interpret-let)
+    (dim, interpret-dim)
+    (if, interpret-if)
+    (goto, interpret-goto)
+  ))
+
+
+(define (interpret-statement stlin program line-nr)
+  (if (null? stlin)
+    (interpret-program program (+ line-nr 1))
+      (begin
+      (when (not (hash-has-key? *function-table* (car stlin)))
+          (print (car stlin))
+          (printf " is not valid ~n")
+          (usage-exit))
+      (cond
+        ((eqv? (car stlin) 'goto)
+          (interpret-goto program stlin))
+        ((eqv? (car stlin) 'if)
+          (if (equal? #t (value-of (cadr stlin)))
+            (interpret-if program stlin)
+            (interpret-program program (+ line-nr 1))))
+          (else
+            ((function-get (car stlin)) (cdr stlin))
+            (interpret-program program (+ line-nr 1)))))))
+
+(define (interpret-program program line-nr)
+  (when (< line-nr (lengthlist program))
+    (let ((inptrow (list-ref program line-nr)))
+      (cond
+        ((= (lengthlist inptrow) 3)
+          (set! inptrow (cddr inptrow))
+          (interpret-statement (car inptrow) program line-nr))
+          ((and (= (lengthlist inptrow) 2) (list? (cadr inptrow)))
+            (set! inptrow (cdr inptrow))
+            (interpret-statement
+            (car inptrow) program line-nr))
+      (else
+            (interpret-program program (+ line-nr 1)))))))
+
+
+(define (main arglist)
+    (if (or (null? arglist) (not (null? (cdr arglist))))
+        (usage-exit)
+        (let* ((sbprogfile (car arglist))
+               (program (readlist-from-inputfile sbprogfile)))
+               (begin (insert-label-table program)
+               (interpret-program program 0)))))
+
+(if (terminal-port? *stdin*)
+    (main (vector->list (current-command-line-arguments)))
+    (printf "sbi.scm: interactive mode~n"))
